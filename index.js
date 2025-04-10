@@ -7,38 +7,57 @@ app.use(cors());
 app.use(express.json());
 
 // ✅ MongoDB Connection
-mongoose.connect('mongodb+srv://smitmpatel0603:Smit0610@cluster0.5jtwcma.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0', {
+mongoose.connect('mongodb+srv://smitmpatel0603:Smit0610@cluster0.5jtwcma.mongodb.net/splittrack?retryWrites=true&w=majority', {
   useNewUrlParser: true,
   useUnifiedTopology: true,
 })
 .then(() => console.log("✅ Connected to MongoDB"))
 .catch(err => console.error("❌ MongoDB connection error:", err));
 
-// ✅ Schema
+/* ---------------------- EXPENSE SCHEMA ---------------------- */
 const ExpenseSchema = new mongoose.Schema({
   description: String,
   amount: Number,
-  category: String, // ✅ New field for charting
   date: { type: Date, default: Date.now },
   uid: String,
-  category: {type: String, default: 'Other'},
+  category: { type: String, default: 'Other' },
 });
 
 const Expense = mongoose.model('Expense', ExpenseSchema);
 
-// ✅ Routes
+/* ---------------------- GROUP SCHEMAS ---------------------- */
+const GroupSchema = new mongoose.Schema({
+  name: String,
+  members: [String], // UIDs or emails
+  createdBy: String,
+  createdAt: { type: Date, default: Date.now },
+});
+const Group = mongoose.model('Group', GroupSchema);
 
+const GroupExpenseSchema = new mongoose.Schema({
+  groupId: String,
+  description: String,
+  amount: Number,
+  paidBy: String,
+  splitBetween: [String],
+  date: { type: Date, default: Date.now },
+});
+const GroupExpense = mongoose.model('GroupExpense', GroupExpenseSchema);
+
+/* ---------------------- ROUTES ---------------------- */
+
+// ✅ Home
 app.get('/', (req, res) => {
   res.send('🎉 SplitTrack Backend is Live!');
 });
 
-// ✅ POST: Add Expense
+/* ---------- EXPENSE ROUTES ---------- */
+
+// ✅ POST: Add Personal Expense
 app.post('/expenses', async (req, res) => {
   const { description, amount, date, uid, category } = req.body;
 
-  if (!uid) {
-    return res.status(400).json({ error: 'UID is required' });
-  }
+  if (!uid) return res.status(400).json({ error: 'UID is required' });
 
   try {
     const newExpense = new Expense({ description, amount, date, uid, category });
@@ -49,11 +68,10 @@ app.post('/expenses', async (req, res) => {
   }
 });
 
-
-// ✅ GET: Fetch Expenses by UID
+// ✅ GET: Get Expenses by User UID
 app.get('/expenses', async (req, res) => {
   const { uid } = req.query;
-  if (!uid) return res.status(400).json({ error: 'UID is required to fetch expenses' });
+  if (!uid) return res.status(400).json({ error: 'UID is required' });
 
   try {
     const expenses = await Expense.find({ uid }).sort({ date: -1 });
@@ -66,12 +84,12 @@ app.get('/expenses', async (req, res) => {
 // ✅ PATCH: Edit Expense
 app.patch('/expenses/:id', async (req, res) => {
   const { id } = req.params;
-  const { description, amount, date } = req.body;
+  const { description, amount, date, category } = req.body;
 
   try {
     const updated = await Expense.findByIdAndUpdate(
       id,
-      { description, amount, date },
+      { description, amount, date, category },
       { new: true }
     );
     res.json(updated);
@@ -80,7 +98,7 @@ app.patch('/expenses/:id', async (req, res) => {
   }
 });
 
-// ✅ DELETE: Remove Expense
+// ✅ DELETE: Delete Expense
 app.delete('/expenses/:id', async (req, res) => {
   const { id } = req.params;
 
@@ -92,7 +110,76 @@ app.delete('/expenses/:id', async (req, res) => {
   }
 });
 
-// ✅ Start Server
+/* ---------- GROUP ROUTES ---------- */
+
+// ✅ POST: Create Group
+app.post('/groups', async (req, res) => {
+  const { name, members, createdBy } = req.body;
+
+  if (!name || !members || !createdBy) {
+    return res.status(400).json({ error: 'Missing group fields' });
+  }
+
+  try {
+    const newGroup = new Group({ name, members, createdBy });
+    await newGroup.save();
+    res.status(201).json(newGroup);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to create group' });
+  }
+});
+
+// ✅ GET: Groups of a User
+app.get('/groups', async (req, res) => {
+  const { uid } = req.query;
+
+  try {
+    const groups = await Group.find({ members: uid });
+    res.json(groups);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch groups' });
+  }
+});
+
+/* ---------- GROUP EXPENSE ROUTES ---------- */
+
+// ✅ POST: Add Group Expense
+app.post('/group-expenses', async (req, res) => {
+  const { groupId, description, amount, paidBy, splitBetween } = req.body;
+
+  if (!groupId || !description || !amount || !paidBy || !splitBetween) {
+    return res.status(400).json({ error: 'Missing expense fields' });
+  }
+
+  try {
+    const expense = new GroupExpense({
+      groupId,
+      description,
+      amount,
+      paidBy,
+      splitBetween,
+    });
+    await expense.save();
+    res.status(201).json(expense);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to save group expense' });
+  }
+});
+
+// ✅ GET: Expenses by Group ID
+app.get('/group-expenses', async (req, res) => {
+  const { groupId } = req.query;
+  if (!groupId) return res.status(400).json({ error: 'Group ID is required' });
+
+  try {
+    const expenses = await GroupExpense.find({ groupId }).sort({ date: -1 });
+    res.json(expenses);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch group expenses' });
+  }
+});
+
+/* ---------- START SERVER ---------- */
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
   console.log(`🚀 Backend running on port ${PORT}`);
