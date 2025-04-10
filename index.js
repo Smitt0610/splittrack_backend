@@ -188,3 +188,15 @@ const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
   console.log(`🚀 Backend running on port ${PORT}`);
 });
+
+// ✅ GET: Get Single Group by ID
+app.get('/groups/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const group = await Group.findById(id);
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+    res.json(group);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch group' });
+  }
+});
