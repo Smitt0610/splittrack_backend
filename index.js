@@ -240,49 +240,62 @@ app.get('/group-balances/:groupId', async (req, res) => {
   }
 });
 
-// ✅ Calculate total balance across all groups for a user (with nicknames)
+// ✅ TOTAL BALANCE CALCULATION (accurate split logic)
 app.get('/total-balance', async (req, res) => {
   const { uid } = req.query;
+  if (!uid) return res.status(400).json({ error: 'UID required' });
+
   try {
     const groups = await Group.find({ members: { $elemMatch: { email: uid } } });
-    const nicknameMap = {};
-    groups.forEach(group => {
-      group.members.forEach(member => {
-        nicknameMap[member.email] = member.nickname;
-      });
-    });
+    const groupIds = groups.map(g => g._id.toString());
 
-    const expenses = await GroupExpense.find({
-      $or: [{ paidBy: uid }, { splitBetween: uid }]
-    });
+    const expenses = await GroupExpense.find({ groupId: { $in: groupIds } });
 
-    let totalOwed = 0;
-    const breakdown = {};
+    const balances = {}; // { memberNickname: netAmount }
 
-    for (let expense of expenses) {
-      const amountPerUser = expense.amount / expense.splitBetween.length;
+    for (const expense of expenses) {
+      const splitAmount = expense.amount / expense.splitBetween.length;
 
-      if (expense.paidBy === uid) {
-        for (let member of expense.splitBetween) {
-          if (member !== uid) {
-            breakdown[member] = (breakdown[member] || 0) - amountPerUser;
-          }
+      for (const member of expense.splitBetween) {
+        if (!balances[member]) balances[member] = 0;
+
+        if (member === expense.paidBy) {
+          balances[member] += expense.amount - splitAmount;
+        } else {
+          balances[member] -= splitAmount;
         }
-        totalOwed -= expense.amount - amountPerUser;
-      } else if (expense.splitBetween.includes(uid)) {
-        breakdown[expense.paidBy] = (breakdown[expense.paidBy] || 0) + amountPerUser;
-        totalOwed += amountPerUser;
       }
     }
 
-    const formattedBreakdown = {};
-    for (let email in breakdown) {
-      const nickname = nicknameMap[email] || email;
-      formattedBreakdown[nickname] = parseFloat(breakdown[email].toFixed(2));
+    const currentUserBalance = {};
+    const currentUserGroups = groups.map(g => g.members).flat();
+
+    for (const member of currentUserGroups) {
+      const nickname = member.nickname;
+      const email = member.email;
+      if (email !== uid) {
+        const yourAmount = balances[uid] || 0;
+        const theirAmount = balances[email] || 0;
+        const net = ((theirAmount - yourAmount) / 2); // split evenly
+        currentUserBalance[nickname] = parseFloat(net.toFixed(2));
+      }
     }
 
-    res.json({ totalOwed: parseFloat(totalOwed.toFixed(2)), breakdown: formattedBreakdown });
+    const totalYouAreOwed = Object.values(currentUserBalance)
+      .filter(val => val > 0)
+      .reduce((sum, val) => sum + val, 0);
+
+    const totalYouOwe = Object.values(currentUserBalance)
+      .filter(val => val < 0)
+      .reduce((sum, val) => sum + Math.abs(val), 0);
+
+    res.json({
+      youOwe: totalYouOwe,
+      youAreOwed: totalYouAreOwed,
+      breakdown: currentUserBalance,
+    });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to calculate total balance' });
+    console.error(err);
+    res.status(500).json({ error: 'Failed to calculate balances' });
   }
 });
