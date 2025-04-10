@@ -240,62 +240,51 @@ app.get('/group-balances/:groupId', async (req, res) => {
   }
 });
 
-// ✅ TOTAL BALANCE CALCULATION (accurate split logic)
+// ✅ Updated backend logic for /total-balance endpoint
+
 app.get('/total-balance', async (req, res) => {
   const { uid } = req.query;
   if (!uid) return res.status(400).json({ error: 'UID required' });
 
   try {
-    const groups = await Group.find({ members: { $elemMatch: { email: uid } } });
-    const groupIds = groups.map(g => g._id.toString());
-
-    const expenses = await GroupExpense.find({ groupId: { $in: groupIds } });
-
-    const balances = {}; // { memberNickname: netAmount }
-
-    for (const expense of expenses) {
-      const splitAmount = expense.amount / expense.splitBetween.length;
-
-      for (const member of expense.splitBetween) {
-        if (!balances[member]) balances[member] = 0;
-
-        if (member === expense.paidBy) {
-          balances[member] += expense.amount - splitAmount;
-        } else {
-          balances[member] -= splitAmount;
-        }
-      }
-    }
-
-    const currentUserBalance = {};
-    const currentUserGroups = groups.map(g => g.members).flat();
-
-    for (const member of currentUserGroups) {
-      const nickname = member.nickname;
-      const email = member.email;
-      if (email !== uid) {
-        const yourAmount = balances[uid] || 0;
-        const theirAmount = balances[email] || 0;
-        const net = ((theirAmount - yourAmount) / 2); // split evenly
-        currentUserBalance[nickname] = parseFloat(net.toFixed(2));
-      }
-    }
-
-    const totalYouAreOwed = Object.values(currentUserBalance)
-      .filter(val => val > 0)
-      .reduce((sum, val) => sum + val, 0);
-
-    const totalYouOwe = Object.values(currentUserBalance)
-      .filter(val => val < 0)
-      .reduce((sum, val) => sum + Math.abs(val), 0);
-
-    res.json({
-      youOwe: totalYouOwe,
-      youAreOwed: totalYouAreOwed,
-      breakdown: currentUserBalance,
+    const groupExpenses = await GroupExpense.find({
+      $or: [
+        { paidBy: uid },
+        { splitBetween: uid },
+      ],
     });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Failed to calculate balances' });
+
+    let balanceMap = {};
+
+    groupExpenses.forEach((expense) => {
+      const share = expense.amount / expense.splitBetween.length;
+
+      expense.splitBetween.forEach(member => {
+        if (member === expense.paidBy) return; // Skip payer for now
+
+        if (uid === expense.paidBy) {
+          // You paid, others owe you
+          balanceMap[member] = (balanceMap[member] || 0) + share;
+        } else if (member === uid) {
+          // Someone else paid, you owe
+          balanceMap[expense.paidBy] = (balanceMap[expense.paidBy] || 0) - share;
+        }
+      });
+    });
+
+    const youOwe = Object.values(balanceMap).filter(v => v < 0).reduce((a, b) => a + b, 0);
+    const youAreOwed = Object.values(balanceMap).filter(v => v > 0).reduce((a, b) => a + b, 0);
+
+    const breakdown = {};
+    for (const [key, value] of Object.entries(balanceMap)) {
+      const group = await Group.findOne({ members: { $elemMatch: { email: key } } });
+      const nickname = group?.members?.find(m => m.email === key)?.nickname || key;
+      breakdown[nickname] = value;
+    }
+
+    res.json({ totalOwe: Math.abs(youOwe), totalOwed: youAreOwed, breakdown });
+  } catch (error) {
+    console.error('Error in /total-balance:', error);
+    res.status(500).json({ error: 'Failed to calculate balance' });
   }
 });
