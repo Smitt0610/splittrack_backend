@@ -28,10 +28,16 @@ const Expense = mongoose.model('Expense', ExpenseSchema);
 /* ---------------------- GROUP SCHEMAS ---------------------- */
 const GroupSchema = new mongoose.Schema({
   name: String,
-  members: [String], // UIDs or emails
+  members: [
+    {
+      email: String,
+      nickname: String,
+    },
+  ],
   createdBy: String,
   createdAt: { type: Date, default: Date.now },
 });
+
 const Group = mongoose.model('Group', GroupSchema);
 
 const GroupExpenseSchema = new mongoose.Schema({
@@ -112,35 +118,33 @@ app.delete('/expenses/:id', async (req, res) => {
 
 /* ---------- GROUP ROUTES ---------- */
 
-// ✅ POST: Create Group
+/// ✅ POST: Create Group with Nicknames
 app.post('/groups', async (req, res) => {
   const { name, members, createdBy } = req.body;
-
   if (!name || !members || !createdBy) {
     return res.status(400).json({ error: 'Missing group fields' });
   }
 
   try {
-    const newGroup = new Group({ name, members, createdBy });
-    await newGroup.save();
-    res.status(201).json(newGroup);
+    const group = new Group({ name, members, createdBy });
+    await group.save();
+    res.status(201).json(group);
   } catch (error) {
     res.status(500).json({ error: 'Failed to create group' });
   }
 });
 
-// ✅ GET: Groups of a User
+// ✅ GET: Groups for a user (by email match)
 app.get('/groups', async (req, res) => {
   const { uid } = req.query;
 
   try {
-    const groups = await Group.find({ members: uid });
+    const groups = await Group.find({ 'members.email': uid });
     res.json(groups);
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch groups' });
   }
 });
-
 /* ---------- GROUP EXPENSE ROUTES ---------- */
 
 // ✅ POST: Add Group Expense
