@@ -200,3 +200,89 @@ app.get('/groups/:id', async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch group' });
   }
 });
+
+// ✅ Add this to your existing backend (index.js)
+
+// ✅ Calculate balances within a group (with nicknames)
+app.get('/group-balances/:groupId', async (req, res) => {
+  const { groupId } = req.params;
+  try {
+    const group = await Group.findById(groupId);
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+
+    const nicknameMap = {};
+    group.members.forEach(member => {
+      nicknameMap[member.email] = member.nickname;
+    });
+
+    const expenses = await GroupExpense.find({ groupId });
+    const balances = {};
+
+    for (let expense of expenses) {
+      const amountPerUser = expense.amount / expense.splitBetween.length;
+
+      balances[expense.paidBy] = (balances[expense.paidBy] || 0) + expense.amount;
+
+      for (let member of expense.splitBetween) {
+        balances[member] = (balances[member] || 0) - amountPerUser;
+      }
+    }
+
+    const formatted = {};
+    for (let email in balances) {
+      const nickname = nicknameMap[email] || email;
+      formatted[nickname] = parseFloat(balances[email].toFixed(2));
+    }
+
+    res.json(formatted);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to calculate balances' });
+  }
+});
+
+// ✅ Calculate total balance across all groups for a user (with nicknames)
+app.get('/total-balance', async (req, res) => {
+  const { uid } = req.query;
+  try {
+    const groups = await Group.find({ members: { $elemMatch: { email: uid } } });
+    const nicknameMap = {};
+    groups.forEach(group => {
+      group.members.forEach(member => {
+        nicknameMap[member.email] = member.nickname;
+      });
+    });
+
+    const expenses = await GroupExpense.find({
+      $or: [{ paidBy: uid }, { splitBetween: uid }]
+    });
+
+    let totalOwed = 0;
+    const breakdown = {};
+
+    for (let expense of expenses) {
+      const amountPerUser = expense.amount / expense.splitBetween.length;
+
+      if (expense.paidBy === uid) {
+        for (let member of expense.splitBetween) {
+          if (member !== uid) {
+            breakdown[member] = (breakdown[member] || 0) - amountPerUser;
+          }
+        }
+        totalOwed -= expense.amount - amountPerUser;
+      } else if (expense.splitBetween.includes(uid)) {
+        breakdown[expense.paidBy] = (breakdown[expense.paidBy] || 0) + amountPerUser;
+        totalOwed += amountPerUser;
+      }
+    }
+
+    const formattedBreakdown = {};
+    for (let email in breakdown) {
+      const nickname = nicknameMap[email] || email;
+      formattedBreakdown[nickname] = parseFloat(breakdown[email].toFixed(2));
+    }
+
+    res.json({ totalOwed: parseFloat(totalOwed.toFixed(2)), breakdown: formattedBreakdown });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to calculate total balance' });
+  }
+});
