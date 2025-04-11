@@ -148,6 +148,7 @@ app.get('/groups', async (req, res) => {
 /* ---------- GROUP EXPENSE ROUTES ---------- */
 
 // ✅ POST: Add Group Expense
+// ✅ STEP 3: Add Group Expense API
 app.post('/group-expenses', async (req, res) => {
   const { groupId, description, amount, paidBy, splitBetween } = req.body;
 
@@ -166,6 +167,7 @@ app.post('/group-expenses', async (req, res) => {
     await expense.save();
     res.status(201).json(expense);
   } catch (error) {
+    console.error('❌ Failed to save group expense:', error);
     res.status(500).json({ error: 'Failed to save group expense' });
   }
 });
@@ -183,11 +185,7 @@ app.get('/group-expenses', async (req, res) => {
   }
 });
 
-/* ---------- START SERVER ---------- */
-const PORT = process.env.PORT || 4000;
-app.listen(PORT, () => {
-  console.log(`🚀 Backend running on port ${PORT}`);
-});
+
 
 // ✅ GET: Get Single Group by ID
 app.get('/groups/:id', async (req, res) => {
@@ -241,50 +239,42 @@ app.get('/group-balances/:groupId', async (req, res) => {
 });
 
 // ✅ Updated backend logic for /total-balance endpoint
-
+// ✅ STEP 5: Balance Calculation for a User
 app.get('/total-balance', async (req, res) => {
   const { uid } = req.query;
-  if (!uid) return res.status(400).json({ error: 'UID required' });
+  if (!uid) return res.status(400).json({ error: 'UID (email) is required' });
 
   try {
-    const groupExpenses = await GroupExpense.find({
-      $or: [
-        { paidBy: uid },
-        { splitBetween: uid },
-      ],
-    });
-
-    let balanceMap = {};
-
-    groupExpenses.forEach((expense) => {
-      const share = expense.amount / expense.splitBetween.length;
-
-      expense.splitBetween.forEach(member => {
-        if (member === expense.paidBy) return; // Skip payer for now
-
-        if (uid === expense.paidBy) {
-          // You paid, others owe you
-          balanceMap[member] = (balanceMap[member] || 0) + share;
-        } else if (member === uid) {
-          // Someone else paid, you owe
-          balanceMap[expense.paidBy] = (balanceMap[expense.paidBy] || 0) - share;
-        }
-      });
-    });
-
-    const youOwe = Object.values(balanceMap).filter(v => v < 0).reduce((a, b) => a + b, 0);
-    const youAreOwed = Object.values(balanceMap).filter(v => v > 0).reduce((a, b) => a + b, 0);
-
+    const expenses = await GroupExpense.find({ splitBetween: uid });
+    let totalOwe = 0;
+    let totalOwed = 0;
     const breakdown = {};
-    for (const [key, value] of Object.entries(balanceMap)) {
-      const group = await Group.findOne({ members: { $elemMatch: { email: key } } });
-      const nickname = group?.members?.find(m => m.email === key)?.nickname || key;
-      breakdown[nickname] = value;
+
+    for (let exp of expenses) {
+      const share = exp.amount / exp.splitBetween.length;
+
+      if (exp.paidBy === uid) {
+        // others owe you
+        for (let member of exp.splitBetween) {
+          if (member !== uid) {
+            breakdown[member] = (breakdown[member] || 0) + share;
+            totalOwed += share;
+          }
+        }
+      } else {
+        // you owe the payer
+        breakdown[exp.paidBy] = (breakdown[exp.paidBy] || 0) - share;
+        totalOwe += share;
+      }
     }
 
-    res.json({ totalOwe: Math.abs(youOwe), totalOwed: youAreOwed, breakdown });
+    res.json({ totalOwe, totalOwed, breakdown });
   } catch (error) {
-    console.error('Error in /total-balance:', error);
-    res.status(500).json({ error: 'Failed to calculate balance' });
+    console.error(error);
+    res.status(500).json({ error: 'Error calculating balances' });
   }
 });
+
+// ✅ START SERVER
+const PORT = process.env.PORT || 4000;
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
